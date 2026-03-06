@@ -18,6 +18,7 @@ import datetime
 import gzip
 import io
 import json
+from moving_average import analyze_obv_filtered_stocks
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -1227,6 +1228,7 @@ if st.button("🚀 Run Screener"):
 
         results_container = [r for r in results_container if r[2]]
         results_container.sort(key=lambda x: max(d['P2_Date'] for d in x[2]), reverse=True)
+        ma_results_map = analyze_obv_filtered_stocks(results_container)
 
         summary_rows = []
         results_map = {}
@@ -1248,6 +1250,15 @@ if st.button("🚀 Run Screener"):
                 "From": divs[0]['P1_Date'].date() if divs else "",
                 "To": divs[0]['P2_Date'].date() if divs else "",
                 "Probability (%)": probability,
+                "MA Type": ma_results_map[ticker].ma_type if ticker in ma_results_map else "",
+                "MA Pair": (
+                    f"{ma_results_map[ticker].fast_window}/{ma_results_map[ticker].slow_window}"
+                    if ticker in ma_results_map else ""
+                ),
+                "MA Signal": ma_results_map[ticker].latest_signal if ticker in ma_results_map else "",
+                "MA Crossover Date": (
+                    ma_results_map[ticker].latest_crossover_date if ticker in ma_results_map else ""
+                ),
             })
             results_map[ticker] = (df, divs, ph, pl)
 
