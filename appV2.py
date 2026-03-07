@@ -1196,7 +1196,12 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
 
 
 def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
+    """Render moving average crossover chart with clear buy/sell arrows and dotted crossover lines."""
+
+
+def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
     """Render moving average crossover chart with buy/sell arrows and dotted crossover lines."""
+
 
     if ma_result is None or price_df is None or price_df.empty:
         st.info("MA chart unavailable for this stock.")
@@ -1220,7 +1225,11 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
 
         line=dict(color="#00b894", width=2.0),
 
+
+        line=dict(color="#00b894", width=2.0),
+
         line=dict(color="#00b894", width=1.8),
+
 
     ))
     fig.add_trace(go.Scatter(
@@ -1229,7 +1238,11 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
 
         line=dict(color="#6c5ce7", width=2.0),
 
+
+        line=dict(color="#6c5ce7", width=2.0),
+
         line=dict(color="#6c5ce7", width=1.8),
+
 
     ))
 
@@ -1283,6 +1296,7 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
     if crossovers.empty:
         st.info("No MA crossover found in the selected period for this stock.")
 
+
             x=bullish.index, y=bullish["Close"], mode="markers",
             name="Buy Signal", marker=dict(symbol="arrow-up", color="green", size=14),
         ))
@@ -1297,6 +1311,7 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
         fig.add_vline(x=ts, line_dash="dot", line_color=color, line_width=1.3, opacity=0.55)
 
 
+
     fig.update_layout(
         title=f"{symbol} Moving Average Crossover Signals",
         xaxis_title="Date",
@@ -1307,7 +1322,11 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
 
         height=560,
 
+
+        height=560,
+
         height=520,
+
 
     )
     st.plotly_chart(fig, use_container_width=True)

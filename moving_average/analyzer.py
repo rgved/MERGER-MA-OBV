@@ -96,6 +96,10 @@ def apply_moving_average_analysis(
     _, crossovers = prepare_ma_overlay(price_df, ma_type, fast_window, slow_window)
 
 
+
+    _, crossovers = prepare_ma_overlay(price_df, ma_type, fast_window, slow_window)
+
+
     _, crossovers = prepare_ma_overlay(price_df, ma_type, fast_window, slow_window)
 
 
@@ -109,6 +113,7 @@ def apply_moving_average_analysis(
 
     work = generate_signals(work, "MA_Fast", "MA_Slow")
     crossovers = work[work["MA_Crossover"] != ""]
+
 
 
 
