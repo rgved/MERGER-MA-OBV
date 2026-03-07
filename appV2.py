@@ -1189,6 +1189,28 @@ def build_ml_features(df, div):
         return None
 
 
+def safe_predict_probability(features_df):
+    """Return model probability or None when sklearn/model versions are incompatible."""
+    if features_df is None:
+        return None
+
+    try:
+        return round(float(model.predict_proba(features_df)[0][1]) * 100, 2)
+    except AttributeError as e:
+        msg = str(e)
+        if "get_init_raw_predictions" in msg:
+            if not st.session_state.get("ml_model_version_warning_shown", False):
+                st.warning(
+                    "⚠️ ML probability is unavailable due to a scikit-learn/model version mismatch. "
+                    "Run without ML probability, or align scikit-learn with the model training version."
+                )
+                st.session_state["ml_model_version_warning_shown"] = True
+            return None
+        raise
+    except Exception:
+        return None
+
+
 # -------------------------------------------------
 # Run Screener
 # -------------------------------------------------
@@ -1240,8 +1262,7 @@ if st.button("🚀 Run Screener"):
             if divs:
                 features_df = build_ml_features(df, divs[0])
                 if features_df is not None:
-                    prob = model.predict_proba(features_df)[0][1]
-                    probability = round(prob * 100, 2)
+                    probability = safe_predict_probability(features_df)
 
             summary_rows.append({
                 "Symbol": ticker, "Name": name,
