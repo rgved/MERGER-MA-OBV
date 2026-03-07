@@ -18,8 +18,13 @@ import datetime
 import gzip
 import io
 import json
+import sklearn
+from moving_average import analyze_obv_filtered_stocks, apply_moving_average_analysis, prepare_ma_overlay
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+EXPECTED_SKLEARN_VERSION = "1.3.2"
+ML_MODEL_PROBABILITY_ENABLED = sklearn.__version__ == EXPECTED_SKLEARN_VERSION
 
 
 # -------------------------------------------------
@@ -423,36 +428,86 @@ Explain what these divergences might indicate for the short-term trend. Format i
 # Visualization – Static
 # -------------------------------------------------
 def plot_static_matplotlib(df, divs, price_highs, price_lows, ticker, vol_method, vol_window):
+    """Matplotlib view: Price + MA signals, OBV, RSI, and volatility."""
     vol_series = compute_volatility(df, vol_method, window=vol_window)
-    fig, (ax1, ax2, ax3) = plt.subplots(
-        3, 1, figsize=(12, 8), sharex=True,
-        gridspec_kw={'height_ratios': [2, 1, 1]}
+    rsi = compute_rsi(df['Close'], period=14)
+
+    ma_result = apply_moving_average_analysis(ticker, df, ma_pairs=((12, 26),))
+    ma_df, crossovers = prepare_ma_overlay(
+        price_df=df,
+        ma_type=ma_result.ma_type,
+        fast_window=ma_result.fast_window,
+        slow_window=ma_result.slow_window,
     )
-    ax1.plot(df.index, df['Close'], color='black', linewidth=1)
-    ax1.scatter(df.index[price_highs], df['Close'].iloc[price_highs], color='red', s=10, alpha=0.5)
-    ax1.scatter(df.index[price_lows], df['Close'].iloc[price_lows], color='green', s=10, alpha=0.5)
-    ax1.set_title(f"{ticker} - Price Action");
-    ax1.grid(True, alpha=0.3);
-    ax1.set_ylabel("Price")
+    regime = "Bullish" if (len(ma_df) and ma_df['MA_Fast'].iloc[-1] >= ma_df['MA_Slow'].iloc[-1]) else "Bearish"
 
-    ax2.plot(df.index, df['OBV'], color='purple', linewidth=1)
-    ax2.set_title("OBV");
-    ax2.grid(True, alpha=0.3);
-    ax2.set_ylabel("OBV")
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(
+        4, 1, figsize=(13, 10), sharex=True,
+        gridspec_kw={'height_ratios': [2.8, 1.2, 1.0, 1.2]}
+    )
 
-    vc = '#d62728' if 'GARCH' in vol_method else '#1f77b4'
-    ax3.plot(vol_series.index, vol_series.values, color=vc, linewidth=1)
-    ax3.fill_between(vol_series.index, vol_series.values, alpha=0.15, color=vc)
-    ax3.set_title(vol_series.name);
-    ax3.grid(True, alpha=0.3);
-    ax3.set_ylabel(vol_series.name)
+    # Price + MA overlay
+    ax1.plot(ma_df.index, ma_df['Close'], color='#3b4252', linewidth=1, alpha=0.85, label='Close')
+    ax1.plot(ma_df.index, ma_df['MA_Fast'], color='green', linewidth=1.6,
+             label=f"{ma_result.ma_type} {ma_result.fast_window}")
+    ax1.plot(ma_df.index, ma_df['MA_Slow'], color='orange', linewidth=1.6,
+             label=f"{ma_result.ma_type} {ma_result.slow_window}")
 
+    bullish = crossovers[crossovers['MA_Crossover'] == 'Bullish']
+    bearish = crossovers[crossovers['MA_Crossover'] == 'Bearish']
+
+    if not bullish.empty:
+        ax1.scatter(
+            bullish.index, bullish['Close'], marker='^', s=120, c='lime', edgecolors='black',
+            linewidths=0.8, zorder=5, label='Buy Signal'
+        )
+    if not bearish.empty:
+        ax1.scatter(
+            bearish.index, bearish['Close'], marker='v', s=120, c='red', edgecolors='black',
+            linewidths=0.8, zorder=5, label='Sell Signal'
+        )
+
+    for ts, row in crossovers.iterrows():
+        color = 'green' if row['MA_Crossover'] == 'Bullish' else 'red'
+        ax1.axvline(ts, color=color, linestyle=':', linewidth=1.2, alpha=0.7)
+
+    # OBV divergences (preserve existing behavior)
     for d in divs:
         c = 'green' if d['Type'] == 'Bullish' else 'red'
-        ax1.plot([d['P1_Date'], d['P2_Date']], [d['P1_Price'], d['P2_Price']], color=c, lw=2, ls='--')
-        ax2.plot([d['P1_Date'], d['P2_Date']], [d['P1_OBV'], d['P2_OBV']], color=c, lw=2, ls='--')
-        ax1.annotate(d['Type'], (d['P2_Date'], d['P2_Price']),
-                     xytext=(10, 0), textcoords='offset points', color=c, weight='bold')
+        ax1.plot([d['P1_Date'], d['P2_Date']], [d['P1_Price'], d['P2_Price']], color=c, lw=1.5, ls='--', alpha=0.6)
+        ax2.plot([d['P1_Date'], d['P2_Date']], [d['P1_OBV'], d['P2_OBV']], color=c, lw=1.5, ls='--')
+
+    ax1.set_title(
+        f"{ticker} — {ma_result.ma_type}({ma_result.fast_window}/{ma_result.slow_window}) — Regime: {regime}",
+        fontsize=12,
+    )
+    ax1.set_ylabel("Price")
+    ax1.grid(True, alpha=0.25)
+    ax1.legend(loc='upper left', ncol=5, fontsize=9)
+
+    # OBV panel
+    ax2.plot(df.index, df['OBV'], color='purple', linewidth=1.2)
+    ax2.set_title("OBV")
+    ax2.set_ylabel("OBV")
+    ax2.grid(True, alpha=0.25)
+
+    # RSI panel
+    ax3.plot(df.index, rsi, color='#1abc9c', linewidth=1.2)
+    ax3.axhline(70, color='red', linestyle=':', linewidth=1)
+    ax3.axhline(30, color='green', linestyle=':', linewidth=1)
+    ax3.set_title("RSI (14)")
+    ax3.set_ylabel("RSI")
+    ax3.grid(True, alpha=0.25)
+
+    # Volatility panel
+    vc = '#d62728' if 'GARCH' in vol_method else '#1f77b4'
+    ax4.plot(vol_series.index, vol_series.values, color=vc, linewidth=1.2)
+    ax4.fill_between(vol_series.index, vol_series.values, alpha=0.15, color=vc)
+    ax4.set_title(vol_series.name)
+    ax4.set_ylabel(vol_series.name)
+    ax4.grid(True, alpha=0.25)
+    ax4.set_xlabel("Date")
+
     plt.tight_layout()
     st.pyplot(fig)
 
@@ -461,16 +516,18 @@ def plot_static_matplotlib(df, divs, price_highs, price_lows, ticker, vol_method
 # Visualization – Interactive (JS synchronized hover)
 # -------------------------------------------------
 def plot_interactive_plotly(df, divs, ticker, vol_method, vol_window):
-    """
-    Renders 4 Plotly subplots inside a single HTML component.
-    A small JS block listens to plotly_hover on the unified figure and
-    uses Plotly.Fx.hover() to force ALL subplots to show their tooltip
-    simultaneously at the same x-position.
-    """
+    """Plotly view: Price+MA crossover arrows + OBV + RSI + volatility."""
     df = df.copy()
-    df['SMA20'] = df['Close'].rolling(20).mean()
-    df['SMA50'] = df['Close'].rolling(50).mean()
     df['RSI'] = compute_rsi(df['Close'], period=14)
+
+    ma_result = apply_moving_average_analysis(ticker, df, ma_pairs=((12, 26),))
+    ma_df, crossovers = prepare_ma_overlay(
+        price_df=df,
+        ma_type=ma_result.ma_type,
+        fast_window=ma_result.fast_window,
+        slow_window=ma_result.slow_window,
+    )
+    regime = "Bullish" if (len(ma_df) and ma_df['MA_Fast'].iloc[-1] >= ma_df['MA_Slow'].iloc[-1]) else "Bearish"
 
     vol_series = compute_volatility(df, vol_method, window=vol_window)
     vol_label = vol_series.name
@@ -485,46 +542,67 @@ def plot_interactive_plotly(df, divs, ticker, vol_method, vol_window):
         rows=4, cols=1,
         shared_xaxes=True,
         vertical_spacing=0.04,
-        row_heights=[0.45, 0.18, 0.15, 0.22],
-        subplot_titles=(f"{ticker} Price", "OBV", "RSI", vol_label),
+        row_heights=[0.48, 0.18, 0.14, 0.20],
+        subplot_titles=(
+            f"{ticker} — {ma_result.ma_type}({ma_result.fast_window}/{ma_result.slow_window}) — Regime: {regime}",
+            "OBV",
+            "RSI (14)",
+            vol_label,
+        ),
     )
 
-    fig.add_trace(go.Ohlc(
-        x=df.index,
-        open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-        name='Price',
-        increasing=dict(line=dict(color='#26a69a')),
-        decreasing=dict(line=dict(color='#ef5350')),
-        hovertemplate='O:%{open:.2f} H:%{high:.2f} L:%{low:.2f} C:%{close:.2f}<extra>Price</extra>',
-        hoverlabel=dict(bgcolor='#1e222d', font_color='white', font_size=12),
+    fig.add_trace(go.Scatter(
+        x=ma_df.index, y=ma_df['Close'], mode='lines', name='Close',
+        line=dict(color='#6b7280', width=1.2),
     ), row=1, col=1)
 
     fig.add_trace(go.Scatter(
-        x=df.index, y=df['SMA20'], name='SMA20',
-        line=dict(color='#4e9af1', width=1),
-        hovertemplate='%{y:.2f}<extra>SMA20</extra>',
-        hoverlabel=dict(bgcolor='#4e9af1', font_color='white'),
+        x=ma_df.index, y=ma_df['MA_Fast'], mode='lines', name=f"{ma_result.ma_type} {ma_result.fast_window}",
+        line=dict(color='green', width=2),
     ), row=1, col=1)
 
     fig.add_trace(go.Scatter(
-        x=df.index, y=df['SMA50'], name='SMA50',
-        line=dict(color='#f0a500', width=1),
-        hovertemplate='%{y:.2f}<extra>SMA50</extra>',
-        hoverlabel=dict(bgcolor='#f0a500', font_color='white'),
+        x=ma_df.index, y=ma_df['MA_Slow'], mode='lines', name=f"{ma_result.ma_type} {ma_result.slow_window}",
+        line=dict(color='orange', width=2),
     ), row=1, col=1)
+
+    bullish = crossovers[crossovers['MA_Crossover'] == 'Bullish']
+    bearish = crossovers[crossovers['MA_Crossover'] == 'Bearish']
+
+    if not bullish.empty:
+        fig.add_trace(go.Scatter(
+            x=bullish.index, y=bullish['Close'], mode='markers+text',
+            name='Buy Signal', text=['BUY'] * len(bullish), textposition='top center',
+            marker=dict(symbol='triangle-up', color='lime', size=14, line=dict(color='black', width=1)),
+        ), row=1, col=1)
+    if not bearish.empty:
+        fig.add_trace(go.Scatter(
+            x=bearish.index, y=bearish['Close'], mode='markers+text',
+            name='Sell Signal', text=['SELL'] * len(bearish), textposition='bottom center',
+            marker=dict(symbol='triangle-down', color='red', size=14, line=dict(color='black', width=1)),
+        ), row=1, col=1)
+
+    for ts, row in crossovers.iterrows():
+        color = 'green' if row['MA_Crossover'] == 'Bullish' else 'red'
+        fig.add_vline(x=ts, line_dash='dot', line_color=color, line_width=1.5, opacity=0.75, row=1, col=1)
+
+    # Keep OBV divergence overlays
+    for d in divs:
+        c = '#2ecc71' if d['Type'] == 'Bullish' else '#e74c3c'
+        fig.add_trace(go.Scatter(
+            x=[d['P1_Date'], d['P2_Date']], y=[d['P1_OBV'], d['P2_OBV']],
+            mode='lines+markers', line=dict(color=c, width=2, dash='dot'),
+            marker=dict(size=6, color=c), showlegend=False,
+        ), row=2, col=1)
 
     fig.add_trace(go.Scatter(
         x=df.index, y=df['OBV'], name='OBV',
         line=dict(color='#9b59b6', width=1.2),
-        hovertemplate='%{y:,.0f}<extra>OBV</extra>',
-        hoverlabel=dict(bgcolor='#9b59b6', font_color='white'),
     ), row=2, col=1)
 
     fig.add_trace(go.Scatter(
         x=df.index, y=df['RSI'], name='RSI',
         line=dict(color='#1abc9c', width=1.2),
-        hovertemplate='%{y:.1f}<extra>RSI</extra>',
-        hoverlabel=dict(bgcolor='#1abc9c', font_color='white'),
     ), row=3, col=1)
     fig.add_hline(y=70, line=dict(color='rgba(231,76,60,0.6)', dash='dot'), row=3, col=1)
     fig.add_hline(y=30, line=dict(color='rgba(46,204,113,0.6)', dash='dot'), row=3, col=1)
@@ -534,124 +612,17 @@ def plot_interactive_plotly(df, divs, ticker, vol_method, vol_window):
         name=vol_label,
         line=dict(color=vol_color_hex, width=1.5),
         fill='tozeroy', fillcolor=hex_rgba(vol_color_hex, 0.15),
-        hovertemplate='%{y:.3f}%<extra>' + vol_label + '</extra>',
-        hoverlabel=dict(bgcolor=vol_color_hex, font_color='white'),
     ), row=4, col=1)
 
-    for d in divs:
-        c = '#2ecc71' if d['Type'] == 'Bullish' else '#e74c3c'
-        fig.add_trace(go.Scatter(
-            x=[d['P1_Date'], d['P2_Date']], y=[d['P1_Price'], d['P2_Price']],
-            mode='lines+markers', line=dict(color=c, width=2, dash='dot'),
-            marker=dict(size=7, color=c), showlegend=False,
-            hovertemplate='%{y:.2f}<extra>' + d['Type'] + ' Price</extra>',
-            hoverlabel=dict(bgcolor=c, font_color='white'),
-        ), row=1, col=1)
-        fig.add_trace(go.Scatter(
-            x=[d['P1_Date'], d['P2_Date']], y=[d['P1_OBV'], d['P2_OBV']],
-            mode='lines+markers', line=dict(color=c, width=2, dash='dot'),
-            marker=dict(size=7, color=c), showlegend=False,
-            hovertemplate='%{y:,.0f}<extra>' + d['Type'] + ' OBV</extra>',
-            hoverlabel=dict(bgcolor=c, font_color='white'),
-        ), row=2, col=1)
-
-    fig.update_xaxes(
-        showspikes=True, spikemode='across', spikesnap='cursor',
-        spikecolor='rgba(200,200,200,0.5)', spikethickness=1, spikedash='dot',
-        gridcolor='rgba(255,255,255,0.06)',
-    )
-    fig.update_yaxes(showspikes=False, gridcolor='rgba(255,255,255,0.06)',
-                     zerolinecolor='rgba(255,255,255,0.1)')
-
     fig.update_layout(
-        hovermode='x',
+        height=980,
+        template='plotly_dark',
         xaxis_rangeslider_visible=False,
-        height=900,
-        showlegend=False,
-        paper_bgcolor='#0e1117',
-        plot_bgcolor='#161b22',
-        font=dict(color='#c9d1d9', size=11),
-        margin=dict(l=60, r=20, t=50, b=40),
+        legend=dict(orientation='h', y=1.02, x=0),
+        hovermode='x unified',
+        margin=dict(t=90, b=40, l=40, r=20),
     )
-
-    fig_json = fig.to_json()
-
-    html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-  <style>
-    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-    body {{ background: #0e1117; }}
-    #plt {{ width: 100%; }}
-  </style>
-</head>
-<body>
-<div id="plt"></div>
-<script>
-(function () {{
-  const fig = {fig_json};
-
-  Plotly.newPlot('plt', fig.data, fig.layout, {{
-    responsive: true,
-    displayModeBar: false,
-    scrollZoom: true,
-  }}).then(function (gd) {{
-    const xaxisForRow = ['x', 'x2', 'x3', 'x4'];
-    const anchorCurve = {{}};
-
-    gd.data.forEach(function (trace, ci) {{
-      const xref = trace.xaxis || 'x';
-      const idx  = xaxisForRow.indexOf(xref);
-      if (idx !== -1 && !(idx in anchorCurve)) {{
-        anchorCurve[idx] = ci;
-      }}
-    }});
-
-    function nearestIdx(traceX, xVal) {{
-      if (!traceX || traceX.length === 0) return 0;
-      const isDate = typeof traceX[0] === 'string';
-      const target = isDate ? new Date(xVal).getTime() : Number(xVal);
-      let best = 0, bestDist = Infinity;
-      traceX.forEach(function (v, i) {{
-        const vn   = isDate ? new Date(v).getTime() : Number(v);
-        const dist = Math.abs(vn - target);
-        if (dist < bestDist) {{ bestDist = dist; best = i; }}
-      }});
-      return best;
-    }}
-
-    let busy = false;
-
-    gd.on('plotly_hover', function (evt) {{
-      if (busy || !evt.points || evt.points.length === 0) return;
-      busy = true;
-      const xVal  = evt.points[0].x;
-      const hpts  = [];
-      Object.keys(anchorCurve).forEach(function (subIdx) {{
-        const ci    = anchorCurve[subIdx];
-        const trace = gd.data[ci];
-        const ptIdx = nearestIdx(trace.x, xVal);
-        hpts.push({{ curveNumber: ci, pointNumber: ptIdx }});
-      }});
-      Plotly.Fx.hover(gd, hpts);
-      setTimeout(function () {{ busy = false; }}, 16);
-    }});
-
-    gd.on('plotly_unhover', function () {{
-      if (busy) return;
-      busy = true;
-      Plotly.Fx.unhover(gd);
-      setTimeout(function () {{ busy = false; }}, 16);
-    }});
-  }});
-}})();
-</script>
-</body>
-</html>
-"""
-    components.html(html, height=920, scrolling=False)
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # -------------------------------------------------
@@ -1188,6 +1159,127 @@ def build_ml_features(df, div):
         return None
 
 
+def safe_predict_probability(features_df):
+    """Return model probability or None when sklearn/model versions are incompatible."""
+    if features_df is None:
+        return None
+
+    if not ML_MODEL_PROBABILITY_ENABLED:
+        if not st.session_state.get("ml_model_version_warning_shown", False):
+            st.warning(
+                f"⚠️ ML probability disabled: installed scikit-learn={sklearn.__version__}, "
+                f"expected={EXPECTED_SKLEARN_VERSION}."
+            )
+            st.session_state["ml_model_version_warning_shown"] = True
+        return None
+
+    try:
+        return round(float(model.predict_proba(features_df)[0][1]) * 100, 2)
+    except AttributeError as e:
+        msg = str(e)
+        if "get_init_raw_predictions" in msg:
+            if not st.session_state.get("ml_model_version_warning_shown", False):
+                st.warning(
+                    "⚠️ ML probability is unavailable due to a scikit-learn/model version mismatch. "
+                    "Run without ML probability, or align scikit-learn with the model training version."
+                )
+                st.session_state["ml_model_version_warning_shown"] = True
+            return None
+        raise
+    except Exception:
+        return None
+
+
+def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
+    """Render moving average crossover chart with clear buy/sell arrows and dotted crossover lines."""
+    if ma_result is None or price_df is None or price_df.empty:
+        st.info("MA chart unavailable for this stock.")
+        return
+
+    ma_df, crossovers = prepare_ma_overlay(
+        price_df=price_df,
+        ma_type=ma_result.ma_type,
+        fast_window=ma_result.fast_window,
+        slow_window=ma_result.slow_window,
+    )
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=ma_df.index, y=ma_df["Close"], mode="lines", name="Close",
+        line=dict(color="#2f2f2f", width=1.6),
+    ))
+    fig.add_trace(go.Scatter(
+        x=ma_df.index, y=ma_df["MA_Fast"], mode="lines",
+        name=f"{ma_result.ma_type} Fast ({ma_result.fast_window})",
+        line=dict(color="#00b894", width=2.0),
+    ))
+    fig.add_trace(go.Scatter(
+        x=ma_df.index, y=ma_df["MA_Slow"], mode="lines",
+        name=f"{ma_result.ma_type} Slow ({ma_result.slow_window})",
+        line=dict(color="#6c5ce7", width=2.0),
+    ))
+
+    bullish = crossovers[crossovers["MA_Crossover"] == "Bullish"]
+    bearish = crossovers[crossovers["MA_Crossover"] == "Bearish"]
+
+    if not bullish.empty:
+        fig.add_trace(go.Scatter(
+            x=bullish.index,
+            y=bullish["Close"],
+            mode="markers+text",
+            name="Buy Signal",
+            text=["BUY"] * len(bullish),
+            textposition="top center",
+            marker=dict(symbol="triangle-up", color="green", size=16, line=dict(color="darkgreen", width=1)),
+        ))
+
+    if not bearish.empty:
+        fig.add_trace(go.Scatter(
+            x=bearish.index,
+            y=bearish["Close"],
+            mode="markers+text",
+            name="Sell Signal",
+            text=["SELL"] * len(bearish),
+            textposition="bottom center",
+            marker=dict(symbol="triangle-down", color="red", size=16, line=dict(color="darkred", width=1)),
+        ))
+
+    # Dotted crossover guides + arrow annotations to make signals very visible.
+    for ts, row in crossovers.iterrows():
+        is_buy = row["MA_Crossover"] == "Bullish"
+        color = "green" if is_buy else "red"
+        direction = 1 if is_buy else -1
+        fig.add_vline(x=ts, line_dash="dot", line_color=color, line_width=1.6, opacity=0.7)
+        fig.add_annotation(
+            x=ts,
+            y=float(row["Close"]),
+            ax=0,
+            ay=-35 * direction,
+            xref="x",
+            yref="y",
+            text="",
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=1.2,
+            arrowwidth=2,
+            arrowcolor=color,
+        )
+
+    if crossovers.empty:
+        st.info("No MA crossover found in the selected period for this stock.")
+
+    fig.update_layout(
+        title=f"{symbol} Moving Average Crossover Signals",
+        xaxis_title="Date",
+        yaxis_title="Price",
+        template="plotly_white",
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.02, x=0),
+        height=560,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
 # -------------------------------------------------
 # Run Screener
 # -------------------------------------------------
@@ -1227,6 +1319,7 @@ if st.button("🚀 Run Screener"):
 
         results_container = [r for r in results_container if r[2]]
         results_container.sort(key=lambda x: max(d['P2_Date'] for d in x[2]), reverse=True)
+        ma_results_map = analyze_obv_filtered_stocks(results_container)
 
         summary_rows = []
         results_map = {}
@@ -1238,8 +1331,7 @@ if st.button("🚀 Run Screener"):
             if divs:
                 features_df = build_ml_features(df, divs[0])
                 if features_df is not None:
-                    prob = model.predict_proba(features_df)[0][1]
-                    probability = round(prob * 100, 2)
+                    probability = safe_predict_probability(features_df)
 
             summary_rows.append({
                 "Symbol": ticker, "Name": name,
@@ -1248,11 +1340,21 @@ if st.button("🚀 Run Screener"):
                 "From": divs[0]['P1_Date'].date() if divs else "",
                 "To": divs[0]['P2_Date'].date() if divs else "",
                 "Probability (%)": probability,
+                "MA Type": ma_results_map[ticker].ma_type if ticker in ma_results_map else "",
+                "MA Pair": (
+                    f"{ma_results_map[ticker].fast_window}/{ma_results_map[ticker].slow_window}"
+                    if ticker in ma_results_map else ""
+                ),
+                "MA Signal": ma_results_map[ticker].latest_signal if ticker in ma_results_map else "",
+                "MA Crossover Date": (
+                    ma_results_map[ticker].latest_crossover_date if ticker in ma_results_map else ""
+                ),
             })
             results_map[ticker] = (df, divs, ph, pl)
 
         st.session_state.scan_results = summary_rows
         st.session_state.results_map = results_map
+        st.session_state.ma_results_map = ma_results_map
 
         # --- Build Date-wise Divergence Summary ---
         # Fetch Nifty 50 closing data for the same period
@@ -1340,9 +1442,10 @@ if st.session_state.get("scan_results"):
 
     # --- Auto-show chart for selected row ---
     selected_rows = event.selection.rows if event and event.selection else []
-    if selected_rows:
-        row_idx = selected_rows[0]
-        selected_symbol = summary_df.iloc[row_idx]["Symbol"]
+    row_idx = selected_rows[0] if selected_rows else 0
+    selected_symbol = summary_df.iloc[row_idx]["Symbol"] if len(summary_df) else None
+
+    if selected_symbol:
         results_map = st.session_state.get("results_map", {})
         if selected_symbol in results_map:
             df, divs, ph, pl = results_map[selected_symbol]
@@ -1361,6 +1464,14 @@ if st.session_state.get("scan_results"):
                 plot_interactive_plotly(df, divs, selected_symbol, vol_method, vol_window)
             else:  # ECharts (True Sync Tooltip)
                 plot_echarts_synchronized(df, divs, selected_symbol, vol_method, vol_window)
+
+            ma_results_map = st.session_state.get("ma_results_map", {})
+            ma_result = ma_results_map.get(selected_symbol)
+            if ma_result is None:
+                ma_result = apply_moving_average_analysis(selected_symbol, df)
+
+            st.subheader(f"{selected_symbol} Moving Average Signals")
+            plot_ma_crossover_signals_plotly(selected_symbol, df, ma_result)
 
     # --- Date-wise Divergence Summary ---
     if st.session_state.get("datewise_summary"):
