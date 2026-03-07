@@ -18,6 +18,7 @@ import datetime
 import gzip
 import io
 import json
+from moving_average import analyze_obv_filtered_stocks
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -1188,6 +1189,28 @@ def build_ml_features(df, div):
         return None
 
 
+def safe_predict_probability(features_df):
+    """Return model probability or None when sklearn/model versions are incompatible."""
+    if features_df is None:
+        return None
+
+    try:
+        return round(float(model.predict_proba(features_df)[0][1]) * 100, 2)
+    except AttributeError as e:
+        msg = str(e)
+        if "get_init_raw_predictions" in msg:
+            if not st.session_state.get("ml_model_version_warning_shown", False):
+                st.warning(
+                    "⚠️ ML probability is unavailable due to a scikit-learn/model version mismatch. "
+                    "Run without ML probability, or align scikit-learn with the model training version."
+                )
+                st.session_state["ml_model_version_warning_shown"] = True
+            return None
+        raise
+    except Exception:
+        return None
+
+
 # -------------------------------------------------
 # Run Screener
 # -------------------------------------------------
@@ -1227,6 +1250,7 @@ if st.button("🚀 Run Screener"):
 
         results_container = [r for r in results_container if r[2]]
         results_container.sort(key=lambda x: max(d['P2_Date'] for d in x[2]), reverse=True)
+        ma_results_map = analyze_obv_filtered_stocks(results_container)
 
         summary_rows = []
         results_map = {}
@@ -1238,8 +1262,7 @@ if st.button("🚀 Run Screener"):
             if divs:
                 features_df = build_ml_features(df, divs[0])
                 if features_df is not None:
-                    prob = model.predict_proba(features_df)[0][1]
-                    probability = round(prob * 100, 2)
+                    probability = safe_predict_probability(features_df)
 
             summary_rows.append({
                 "Symbol": ticker, "Name": name,
@@ -1248,6 +1271,15 @@ if st.button("🚀 Run Screener"):
                 "From": divs[0]['P1_Date'].date() if divs else "",
                 "To": divs[0]['P2_Date'].date() if divs else "",
                 "Probability (%)": probability,
+                "MA Type": ma_results_map[ticker].ma_type if ticker in ma_results_map else "",
+                "MA Pair": (
+                    f"{ma_results_map[ticker].fast_window}/{ma_results_map[ticker].slow_window}"
+                    if ticker in ma_results_map else ""
+                ),
+                "MA Signal": ma_results_map[ticker].latest_signal if ticker in ma_results_map else "",
+                "MA Crossover Date": (
+                    ma_results_map[ticker].latest_crossover_date if ticker in ma_results_map else ""
+                ),
             })
             results_map[ticker] = (df, divs, ph, pl)
 
