@@ -56,6 +56,28 @@ def select_ma_type(volatility: float, trend_strength: float, noise_ratio: float)
     return "EMA"
 
 
+
+def prepare_ma_overlay(
+    price_df: pd.DataFrame,
+    ma_type: str,
+    fast_window: int,
+    slow_window: int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return dataframe with MA columns and a filtered crossover dataframe."""
+    work = price_df.copy()
+    if ma_type == "SMA":
+        work["MA_Fast"] = compute_sma(work, "Close", fast_window)
+        work["MA_Slow"] = compute_sma(work, "Close", slow_window)
+    else:
+        work["MA_Fast"] = compute_ema(work, "Close", fast_window)
+        work["MA_Slow"] = compute_ema(work, "Close", slow_window)
+
+    work = generate_signals(work, "MA_Fast", "MA_Slow")
+    crossovers = work[work["MA_Crossover"] != ""]
+    return work, crossovers
+
+
+
 def apply_moving_average_analysis(
     symbol: str,
     price_df: pd.DataFrame,
@@ -71,6 +93,9 @@ def apply_moving_average_analysis(
 
     fast_window, slow_window = next(iter(ma_pairs))
 
+    _, crossovers = prepare_ma_overlay(price_df, ma_type, fast_window, slow_window)
+=======
+
     work = price_df.copy()
     if ma_type == "SMA":
         work["MA_Fast"] = compute_sma(work, "Close", fast_window)
@@ -81,6 +106,7 @@ def apply_moving_average_analysis(
 
     work = generate_signals(work, "MA_Fast", "MA_Slow")
     crossovers = work[work["MA_Crossover"] != ""]
+
 
     if crossovers.empty:
         latest_signal = "No Crossover"
