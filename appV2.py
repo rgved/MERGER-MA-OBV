@@ -1190,8 +1190,19 @@ def safe_predict_probability(features_df):
         return None
 
 
+
 def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
     """Render moving average crossover chart with clear buy/sell arrows and dotted crossover lines."""
+
+
+def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
+    """Render moving average crossover chart with clear buy/sell arrows and dotted crossover lines."""
+
+
+def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
+    """Render moving average crossover chart with buy/sell arrows and dotted crossover lines."""
+
+
     if ma_result is None or price_df is None or price_df.empty:
         st.info("MA chart unavailable for this stock.")
         return
@@ -1211,12 +1222,28 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
     fig.add_trace(go.Scatter(
         x=ma_df.index, y=ma_df["MA_Fast"], mode="lines",
         name=f"{ma_result.ma_type} Fast ({ma_result.fast_window})",
+
         line=dict(color="#00b894", width=2.0),
+
+
+        line=dict(color="#00b894", width=2.0),
+
+        line=dict(color="#00b894", width=1.8),
+
+
     ))
     fig.add_trace(go.Scatter(
         x=ma_df.index, y=ma_df["MA_Slow"], mode="lines",
         name=f"{ma_result.ma_type} Slow ({ma_result.slow_window})",
+
         line=dict(color="#6c5ce7", width=2.0),
+
+
+        line=dict(color="#6c5ce7", width=2.0),
+
+        line=dict(color="#6c5ce7", width=1.8),
+
+
     ))
 
     bullish = crossovers[crossovers["MA_Crossover"] == "Bullish"]
@@ -1224,6 +1251,7 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
 
     if not bullish.empty:
         fig.add_trace(go.Scatter(
+
             x=bullish.index,
             y=bullish["Close"],
             mode="markers+text",
@@ -1268,6 +1296,22 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
     if crossovers.empty:
         st.info("No MA crossover found in the selected period for this stock.")
 
+
+            x=bullish.index, y=bullish["Close"], mode="markers",
+            name="Buy Signal", marker=dict(symbol="arrow-up", color="green", size=14),
+        ))
+    if not bearish.empty:
+        fig.add_trace(go.Scatter(
+            x=bearish.index, y=bearish["Close"], mode="markers",
+            name="Sell Signal", marker=dict(symbol="arrow-down", color="red", size=14),
+        ))
+
+    for ts, row in crossovers.iterrows():
+        color = "green" if row["MA_Crossover"] == "Bullish" else "red"
+        fig.add_vline(x=ts, line_dash="dot", line_color=color, line_width=1.3, opacity=0.55)
+
+
+
     fig.update_layout(
         title=f"{symbol} Moving Average Crossover Signals",
         xaxis_title="Date",
@@ -1275,9 +1319,18 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
         template="plotly_white",
         hovermode="x unified",
         legend=dict(orientation="h", y=1.02, x=0),
+
         height=560,
+
+
+        height=560,
+
+        height=520,
+
+
     )
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 # -------------------------------------------------
