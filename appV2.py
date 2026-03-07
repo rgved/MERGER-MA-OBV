@@ -18,8 +18,13 @@ import datetime
 import gzip
 import io
 import json
+import sklearn
+from moving_average import analyze_obv_filtered_stocks, apply_moving_average_analysis, prepare_ma_overlay
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+EXPECTED_SKLEARN_VERSION = "1.3.2"
+ML_MODEL_PROBABILITY_ENABLED = sklearn.__version__ == EXPECTED_SKLEARN_VERSION
 
 
 # -------------------------------------------------
@@ -1188,6 +1193,96 @@ def build_ml_features(df, div):
         return None
 
 
+def safe_predict_probability(features_df):
+    """Return model probability or None when sklearn/model versions are incompatible."""
+    if features_df is None:
+        return None
+
+    if not ML_MODEL_PROBABILITY_ENABLED:
+        if not st.session_state.get("ml_model_version_warning_shown", False):
+            st.warning(
+                f"⚠️ ML probability disabled: installed scikit-learn={sklearn.__version__}, "
+                f"expected={EXPECTED_SKLEARN_VERSION}."
+            )
+            st.session_state["ml_model_version_warning_shown"] = True
+        return None
+
+    try:
+        return round(float(model.predict_proba(features_df)[0][1]) * 100, 2)
+    except AttributeError as e:
+        msg = str(e)
+        if "get_init_raw_predictions" in msg:
+            if not st.session_state.get("ml_model_version_warning_shown", False):
+                st.warning(
+                    "⚠️ ML probability is unavailable due to a scikit-learn/model version mismatch. "
+                    "Run without ML probability, or align scikit-learn with the model training version."
+                )
+                st.session_state["ml_model_version_warning_shown"] = True
+            return None
+        raise
+    except Exception:
+        return None
+
+
+def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
+    """Render moving average crossover chart with buy/sell arrows and dotted crossover lines."""
+    if ma_result is None or price_df is None or price_df.empty:
+        st.info("MA chart unavailable for this stock.")
+        return
+
+    ma_df, crossovers = prepare_ma_overlay(
+        price_df=price_df,
+        ma_type=ma_result.ma_type,
+        fast_window=ma_result.fast_window,
+        slow_window=ma_result.slow_window,
+    )
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=ma_df.index, y=ma_df["Close"], mode="lines", name="Close",
+        line=dict(color="#2f2f2f", width=1.6),
+    ))
+    fig.add_trace(go.Scatter(
+        x=ma_df.index, y=ma_df["MA_Fast"], mode="lines",
+        name=f"{ma_result.ma_type} Fast ({ma_result.fast_window})",
+        line=dict(color="#00b894", width=1.8),
+    ))
+    fig.add_trace(go.Scatter(
+        x=ma_df.index, y=ma_df["MA_Slow"], mode="lines",
+        name=f"{ma_result.ma_type} Slow ({ma_result.slow_window})",
+        line=dict(color="#6c5ce7", width=1.8),
+    ))
+
+    bullish = crossovers[crossovers["MA_Crossover"] == "Bullish"]
+    bearish = crossovers[crossovers["MA_Crossover"] == "Bearish"]
+
+    if not bullish.empty:
+        fig.add_trace(go.Scatter(
+            x=bullish.index, y=bullish["Close"], mode="markers",
+            name="Buy Signal", marker=dict(symbol="arrow-up", color="green", size=14),
+        ))
+    if not bearish.empty:
+        fig.add_trace(go.Scatter(
+            x=bearish.index, y=bearish["Close"], mode="markers",
+            name="Sell Signal", marker=dict(symbol="arrow-down", color="red", size=14),
+        ))
+
+    for ts, row in crossovers.iterrows():
+        color = "green" if row["MA_Crossover"] == "Bullish" else "red"
+        fig.add_vline(x=ts, line_dash="dot", line_color=color, line_width=1.3, opacity=0.55)
+
+    fig.update_layout(
+        title=f"{symbol} Moving Average Crossover Signals",
+        xaxis_title="Date",
+        yaxis_title="Price",
+        template="plotly_white",
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.02, x=0),
+        height=520,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
 # -------------------------------------------------
 # Run Screener
 # -------------------------------------------------
@@ -1227,6 +1322,7 @@ if st.button("🚀 Run Screener"):
 
         results_container = [r for r in results_container if r[2]]
         results_container.sort(key=lambda x: max(d['P2_Date'] for d in x[2]), reverse=True)
+        ma_results_map = analyze_obv_filtered_stocks(results_container)
 
         summary_rows = []
         results_map = {}
@@ -1238,8 +1334,7 @@ if st.button("🚀 Run Screener"):
             if divs:
                 features_df = build_ml_features(df, divs[0])
                 if features_df is not None:
-                    prob = model.predict_proba(features_df)[0][1]
-                    probability = round(prob * 100, 2)
+                    probability = safe_predict_probability(features_df)
 
             summary_rows.append({
                 "Symbol": ticker, "Name": name,
@@ -1248,11 +1343,21 @@ if st.button("🚀 Run Screener"):
                 "From": divs[0]['P1_Date'].date() if divs else "",
                 "To": divs[0]['P2_Date'].date() if divs else "",
                 "Probability (%)": probability,
+                "MA Type": ma_results_map[ticker].ma_type if ticker in ma_results_map else "",
+                "MA Pair": (
+                    f"{ma_results_map[ticker].fast_window}/{ma_results_map[ticker].slow_window}"
+                    if ticker in ma_results_map else ""
+                ),
+                "MA Signal": ma_results_map[ticker].latest_signal if ticker in ma_results_map else "",
+                "MA Crossover Date": (
+                    ma_results_map[ticker].latest_crossover_date if ticker in ma_results_map else ""
+                ),
             })
             results_map[ticker] = (df, divs, ph, pl)
 
         st.session_state.scan_results = summary_rows
         st.session_state.results_map = results_map
+        st.session_state.ma_results_map = ma_results_map
 
         # --- Build Date-wise Divergence Summary ---
         # Fetch Nifty 50 closing data for the same period
@@ -1361,6 +1466,14 @@ if st.session_state.get("scan_results"):
                 plot_interactive_plotly(df, divs, selected_symbol, vol_method, vol_window)
             else:  # ECharts (True Sync Tooltip)
                 plot_echarts_synchronized(df, divs, selected_symbol, vol_method, vol_window)
+
+            ma_results_map = st.session_state.get("ma_results_map", {})
+            ma_result = ma_results_map.get(selected_symbol)
+            if ma_result is None:
+                ma_result = apply_moving_average_analysis(selected_symbol, df)
+
+            st.subheader(f"{selected_symbol} Moving Average Signals")
+            plot_ma_crossover_signals_plotly(selected_symbol, df, ma_result)
 
     # --- Date-wise Divergence Summary ---
     if st.session_state.get("datewise_summary"):
