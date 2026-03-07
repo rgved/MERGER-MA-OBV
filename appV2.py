@@ -1206,7 +1206,6 @@ def safe_predict_probability(features_df):
             )
             st.session_state["ml_model_version_warning_shown"] = True
         return None
-
     try:
         return round(float(model.predict_proba(features_df)[0][1]) * 100, 2)
     except AttributeError as e:
@@ -1222,6 +1221,7 @@ def safe_predict_probability(features_df):
         raise
     except Exception:
         return None
+
 
 
 def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
@@ -1281,6 +1281,7 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
         height=520,
     )
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 # -------------------------------------------------
