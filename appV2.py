@@ -213,6 +213,7 @@ def get_instrument_key(instruments_df, ticker, is_index=False):
 
 
 def fetch_upstox_historical_data(instrument_key, interval, from_date, to_date, access_token):
+    if access_token: access_token = access_token.replace("Bearer ", "").strip()
     api_instance = upstox_client.HistoryApi()
     api_instance.api_client.configuration.access_token = access_token
     try:
@@ -246,7 +247,7 @@ def map_period_to_dates(period):
 # App Config
 # -------------------------------------------------
 st.set_page_config(layout="wide", page_title="OBV Divergence Master")
-st.title("📊 OBV Divergence Screener (Dual-View)")
+st.title("OBV Divergence Screener x Moving Average")
 
 
 @st.cache_resource
@@ -427,17 +428,17 @@ Explain what these divergences might indicate for the short-term trend. Format i
 # -------------------------------------------------
 # Visualization – Static
 # -------------------------------------------------
-def plot_static_matplotlib(df, divs, price_highs, price_lows, ticker, vol_method, vol_window):
+def plot_static_matplotlib(df, divs, price_highs, price_lows, ticker, vol_method, vol_window, custom_ma_fast=12, custom_ma_slow=26):
     """Matplotlib view: Price + MA signals, OBV, RSI, and volatility."""
     vol_series = compute_volatility(df, vol_method, window=vol_window)
     rsi = compute_rsi(df['Close'], period=14)
 
-    ma_result = apply_moving_average_analysis(ticker, df, ma_pairs=((12, 26),))
+    ma_result = apply_moving_average_analysis(ticker, df, ma_pairs=((custom_ma_fast, custom_ma_slow),))
     ma_df, crossovers = prepare_ma_overlay(
         price_df=df,
         ma_type=ma_result.ma_type,
-        fast_window=ma_result.fast_window,
-        slow_window=ma_result.slow_window,
+        fast_window=custom_ma_fast,
+        slow_window=custom_ma_slow,
     )
     regime = "Bullish" if (len(ma_df) and ma_df['MA_Fast'].iloc[-1] >= ma_df['MA_Slow'].iloc[-1]) else "Bearish"
 
@@ -453,23 +454,37 @@ def plot_static_matplotlib(df, divs, price_highs, price_lows, ticker, vol_method
     ax1.plot(ma_df.index, ma_df['MA_Slow'], color='orange', linewidth=1.6,
              label=f"{ma_result.ma_type} {ma_result.slow_window}")
 
-    bullish = crossovers[crossovers['MA_Crossover'] == 'Bullish']
-    bearish = crossovers[crossovers['MA_Crossover'] == 'Bearish']
-
-    if not bullish.empty:
-        ax1.scatter(
-            bullish.index, bullish['Close'], marker='^', s=120, c='lime', edgecolors='black',
-            linewidths=0.8, zorder=5, label='Buy Signal'
-        )
-    if not bearish.empty:
-        ax1.scatter(
-            bearish.index, bearish['Close'], marker='v', s=120, c='red', edgecolors='black',
-            linewidths=0.8, zorder=5, label='Sell Signal'
-        )
-
+    # Add signal arrows pointing exactly to the intersection
     for ts, row in crossovers.iterrows():
-        color = 'green' if row['MA_Crossover'] == 'Bullish' else 'red'
+        is_buy = row['MA_Crossover'] == 'Bullish'
+        color = 'lime' if is_buy else 'red'
+        
+        # Dotted line
         ax1.axvline(ts, color=color, linestyle=':', linewidth=1.2, alpha=0.7)
+        
+        # Arrow pointing to the MA fast line
+        y_val = row['MA_Fast']
+        offset = -40 if is_buy else 40  # Negative offset points UP from bottom for BUY
+        
+        ax1.annotate(
+            "BUY" if is_buy else "SELL",
+            xy=(ts, y_val),
+            xytext=(0, offset),
+            textcoords="offset points",
+            ha="center",
+            va="center",
+            bbox=dict(boxstyle="round,pad=0.3", fc="black", ec=color, lw=1, alpha=0.5),
+            color=color,
+            fontweight="bold",
+            fontsize=9,
+            arrowprops=dict(
+                arrowstyle="->",
+                color=color,
+                lw=2,
+                shrinkA=0,
+                shrinkB=0,
+            )
+        )
 
     # OBV divergences (preserve existing behavior)
     for d in divs:
@@ -480,6 +495,7 @@ def plot_static_matplotlib(df, divs, price_highs, price_lows, ticker, vol_method
     ax1.set_title(
         f"{ticker} — {ma_result.ma_type}({ma_result.fast_window}/{ma_result.slow_window}) — Regime: {regime}",
         fontsize=12,
+        pad=20  # Add padding between title and plot
     )
     ax1.set_ylabel("Price")
     ax1.grid(True, alpha=0.25)
@@ -508,6 +524,7 @@ def plot_static_matplotlib(df, divs, price_highs, price_lows, ticker, vol_method
     ax4.grid(True, alpha=0.25)
     ax4.set_xlabel("Date")
 
+    plt.subplots_adjust(top=0.92)  # Create extra space at the top
     plt.tight_layout()
     st.pyplot(fig)
 
@@ -515,17 +532,17 @@ def plot_static_matplotlib(df, divs, price_highs, price_lows, ticker, vol_method
 # -------------------------------------------------
 # Visualization – Interactive (JS synchronized hover)
 # -------------------------------------------------
-def plot_interactive_plotly(df, divs, ticker, vol_method, vol_window):
+def plot_interactive_plotly(df, divs, ticker, vol_method, vol_window, custom_ma_fast=12, custom_ma_slow=26):
     """Plotly view: Price+MA crossover arrows + OBV + RSI + volatility."""
     df = df.copy()
     df['RSI'] = compute_rsi(df['Close'], period=14)
 
-    ma_result = apply_moving_average_analysis(ticker, df, ma_pairs=((12, 26),))
+    ma_result = apply_moving_average_analysis(ticker, df, ma_pairs=((custom_ma_fast, custom_ma_slow),))
     ma_df, crossovers = prepare_ma_overlay(
         price_df=df,
         ma_type=ma_result.ma_type,
-        fast_window=ma_result.fast_window,
-        slow_window=ma_result.slow_window,
+        fast_window=custom_ma_fast,
+        slow_window=custom_ma_slow,
     )
     regime = "Bullish" if (len(ma_df) and ma_df['MA_Fast'].iloc[-1] >= ma_df['MA_Slow'].iloc[-1]) else "Bearish"
 
@@ -566,25 +583,35 @@ def plot_interactive_plotly(df, divs, ticker, vol_method, vol_window):
         line=dict(color='orange', width=2),
     ), row=1, col=1)
 
-    bullish = crossovers[crossovers['MA_Crossover'] == 'Bullish']
-    bearish = crossovers[crossovers['MA_Crossover'] == 'Bearish']
-
-    if not bullish.empty:
-        fig.add_trace(go.Scatter(
-            x=bullish.index, y=bullish['Close'], mode='markers+text',
-            name='Buy Signal', text=['BUY'] * len(bullish), textposition='top center',
-            marker=dict(symbol='triangle-up', color='lime', size=14, line=dict(color='black', width=1)),
-        ), row=1, col=1)
-    if not bearish.empty:
-        fig.add_trace(go.Scatter(
-            x=bearish.index, y=bearish['Close'], mode='markers+text',
-            name='Sell Signal', text=['SELL'] * len(bearish), textposition='bottom center',
-            marker=dict(symbol='triangle-down', color='red', size=14, line=dict(color='black', width=1)),
-        ), row=1, col=1)
-
+    # Dotted crossover guides + arrow annotations to make signals base on intersection
     for ts, row in crossovers.iterrows():
-        color = 'green' if row['MA_Crossover'] == 'Bullish' else 'red'
+        is_buy = row['MA_Crossover'] == 'Bullish'
+        color = 'lime' if is_buy else 'red'
+        direction = 1 if is_buy else -1
+        
+        # Add dotted vertical line
         fig.add_vline(x=ts, line_dash='dot', line_color=color, line_width=1.5, opacity=0.75, row=1, col=1)
+        
+        # Add arrow annotation with base at the crossover point
+        fig.add_annotation(
+            x=ts,
+            y=float(row['MA_Fast']),
+            ax=0,
+            ay=40 * direction,  # Positive ay points up (for sell, meaning arrow points down to point), negative ay points down
+            xref='x1',
+            yref='y1',
+            text="BUY" if is_buy else "SELL",
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=1.2,
+            arrowwidth=2,
+            arrowcolor=color,
+            font=dict(color=color, size=11, weight="bold"),
+            bgcolor='rgba(0,0,0,0.5)',
+            bordercolor=color,
+            borderwidth=1,
+            borderpad=3
+        )
 
     # Keep OBV divergence overlays
     for d in divs:
@@ -620,7 +647,7 @@ def plot_interactive_plotly(df, divs, ticker, vol_method, vol_window):
         xaxis_rangeslider_visible=False,
         legend=dict(orientation='h', y=1.02, x=0),
         hovermode='x unified',
-        margin=dict(t=90, b=40, l=40, r=20),
+        margin=dict(t=120, b=40, l=40, r=20),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -628,7 +655,7 @@ def plot_interactive_plotly(df, divs, ticker, vol_method, vol_window):
 # -------------------------------------------------
 # Visualization – ECharts (TRUE synchronized tooltips)
 # -------------------------------------------------
-def plot_echarts_synchronized(df, divs, ticker, vol_method, vol_window):
+def plot_echarts_synchronized(df, divs, ticker, vol_method, vol_window, custom_ma_fast=12, custom_ma_slow=26):
     df = df.copy()
     df['SMA20'] = df['Close'].rolling(20).mean()
     df['SMA50'] = df['Close'].rolling(50).mean()
@@ -666,6 +693,38 @@ def plot_echarts_synchronized(df, divs, ticker, vol_method, vol_window):
     # FIX 2: pre-compute the rgba string instead of fragile string replacement
     vol_color_rgba = 'rgba(231,76,60,0.12)' if 'GARCH' in vol_method else 'rgba(52,152,219,0.12)'
 
+    ma_result = apply_moving_average_analysis(ticker, df, ma_pairs=((custom_ma_fast, custom_ma_slow),))
+    ma_df, crossovers = prepare_ma_overlay(
+        price_df=df,
+        ma_type=ma_result.ma_type,
+        fast_window=custom_ma_fast,
+        slow_window=custom_ma_slow,
+    )
+    
+    # --- Crossover mark points ---
+    crossover_mark_points = []
+    crossover_mark_lines = []
+    for ts, row in crossovers.iterrows():
+        is_buy = row['MA_Crossover'] == 'Bullish'
+        color = '#2ecc71' if is_buy else '#e74c3c'
+        d_str = str(ts)[:10]
+        y_val = round(float(row['MA_Fast']), 2)
+        offset = 30 if is_buy else -30  # Offset down for buy, up for sell
+        
+        crossover_mark_lines.append(
+            {"xAxis": d_str, "lineStyle": {"color": color, "type": "dotted", "width": 1.5, "opacity": 0.5}}
+        )
+        crossover_mark_points.append({
+            "name": "BUY" if is_buy else "SELL",
+            "coord": [d_str, y_val],
+            "value": "BUY" if is_buy else "SELL",
+            "itemStyle": {"color": color},
+            "symbol": "pin" if is_buy else "pin", # can use path:// for custom arrow
+            "symbolSize": 45,
+            "symbolOffset": [0, offset],
+            "label": {"show": True, "color": "#fff", "fontSize": 10, "fontWeight": "bold"}
+        })
+
     # --- Divergence mark lines ---
     price_mark_lines = []
     obv_mark_lines = []
@@ -688,6 +747,8 @@ def plot_echarts_synchronized(df, divs, ticker, vol_method, vol_window):
 
     price_mark_lines_json = json.dumps(price_mark_lines)
     obv_mark_lines_json = json.dumps(obv_mark_lines)
+    cx_lines_json = json.dumps(crossover_mark_lines)
+    cx_points_json = json.dumps(crossover_mark_points)
     ohlc_json = json.dumps(ohlc_data)
     sma20_json = json.dumps(sma20_data)
     sma50_json = json.dumps(sma50_data)
@@ -753,6 +814,8 @@ def plot_echarts_synchronized(df, divs, ticker, vol_method, vol_window):
   const volData     = {vol_json};
   const priceMark   = {price_mark_lines_json};
   const obvMark     = {obv_mark_lines_json};
+  const cxLines     = {cx_lines_json};
+  const cxPoints    = {cx_points_json};
 
   const BG        = '#0e1117';
   const GRID_BG   = '#161b22';
@@ -1193,20 +1256,11 @@ def safe_predict_probability(features_df):
 
 def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
     """Render moving average crossover chart with clear buy/sell arrows and dotted crossover lines."""
-
-
-def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
-    """Render moving average crossover chart with clear buy/sell arrows and dotted crossover lines."""
-
-
-def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
-    """Render moving average crossover chart with buy/sell arrows and dotted crossover lines."""
-
-
     if ma_result is None or price_df is None or price_df.empty:
         st.info("MA chart unavailable for this stock.")
         return
 
+    from moving_average.analyzer import prepare_ma_overlay
     ma_df, crossovers = prepare_ma_overlay(
         price_df=price_df,
         ma_type=ma_result.ma_type,
@@ -1222,28 +1276,12 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
     fig.add_trace(go.Scatter(
         x=ma_df.index, y=ma_df["MA_Fast"], mode="lines",
         name=f"{ma_result.ma_type} Fast ({ma_result.fast_window})",
-
         line=dict(color="#00b894", width=2.0),
-
-
-        line=dict(color="#00b894", width=2.0),
-
-        line=dict(color="#00b894", width=1.8),
-
-
     ))
     fig.add_trace(go.Scatter(
         x=ma_df.index, y=ma_df["MA_Slow"], mode="lines",
         name=f"{ma_result.ma_type} Slow ({ma_result.slow_window})",
-
         line=dict(color="#6c5ce7", width=2.0),
-
-
-        line=dict(color="#6c5ce7", width=2.0),
-
-        line=dict(color="#6c5ce7", width=1.8),
-
-
     ))
 
     bullish = crossovers[crossovers["MA_Crossover"] == "Bullish"]
@@ -1251,7 +1289,6 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
 
     if not bullish.empty:
         fig.add_trace(go.Scatter(
-
             x=bullish.index,
             y=bullish["Close"],
             mode="markers+text",
@@ -1296,22 +1333,6 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
     if crossovers.empty:
         st.info("No MA crossover found in the selected period for this stock.")
 
-
-            x=bullish.index, y=bullish["Close"], mode="markers",
-            name="Buy Signal", marker=dict(symbol="arrow-up", color="green", size=14),
-        ))
-    if not bearish.empty:
-        fig.add_trace(go.Scatter(
-            x=bearish.index, y=bearish["Close"], mode="markers",
-            name="Sell Signal", marker=dict(symbol="arrow-down", color="red", size=14),
-        ))
-
-    for ts, row in crossovers.iterrows():
-        color = "green" if row["MA_Crossover"] == "Bullish" else "red"
-        fig.add_vline(x=ts, line_dash="dot", line_color=color, line_width=1.3, opacity=0.55)
-
-
-
     fig.update_layout(
         title=f"{symbol} Moving Average Crossover Signals",
         xaxis_title="Date",
@@ -1319,17 +1340,10 @@ def plot_ma_crossover_signals_plotly(symbol, price_df, ma_result):
         template="plotly_white",
         hovermode="x unified",
         legend=dict(orientation="h", y=1.02, x=0),
-
         height=560,
-
-
-        height=560,
-
-        height=520,
-
-
     )
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
@@ -1478,10 +1492,24 @@ if st.session_state.get("scan_results"):
     for col in ["Symbol", "Name", "Signal", "Type", "From", "To"]:
         if col in summary_df.columns:
             summary_df[col] = summary_df[col].fillna("").astype(str)
+
+    # --- MA Pair Filter ---
+    if "MA Pair" in summary_df.columns:
+        available_pairs = sorted([p for p in summary_df["MA Pair"].unique() if p])
+        if available_pairs:
+            selected_pair = st.selectbox(
+                "Filter by MA Pair",
+                options=["All"] + available_pairs,
+                index=0,
+                help="Select an MA pair to filter the results"
+            )
+            if selected_pair != "All":
+                summary_df = summary_df[summary_df["MA Pair"] == selected_pair]
+
     st.caption("👆 Click on a row to view that stock's chart below")
     event = st.dataframe(
         summary_df, use_container_width=True,
-        on_select="rerun", selection_mode="single-rows",
+        on_select="rerun", selection_mode="single-row",
     )
 
     # --- CSV Download for Scan Results ---
@@ -1511,20 +1539,25 @@ if st.session_state.get("scan_results"):
                     st.metric("ML Success Probability", f"{prob_val}%")
 
             st.subheader(f"{selected_symbol} Chart")
+
+            st.markdown("##### Custom Moving Average Tool")
+            col1, col2 = st.columns(2)
+            with col1:
+                custom_ma_fast = st.selectbox("Custom Fast MA", [5, 10, 12, 20, 50, 100], index=2, key="custom_fast")
+            with col2:
+                custom_ma_slow = st.selectbox("Custom Slow MA", [20, 26, 50, 100, 200], index=1, key="custom_slow")
+            
+            if custom_ma_fast >= custom_ma_slow:
+                st.warning("⚠️ Fast MA should be smaller than Slow MA for proper crossover detection.")
+
             if chart_style == "Static (Matplotlib)":
-                plot_static_matplotlib(df, divs, ph, pl, selected_symbol, vol_method, vol_window)
+                plot_static_matplotlib(df, divs, ph, pl, selected_symbol, vol_method, vol_window, custom_ma_fast, custom_ma_slow)
             elif chart_style == "Interactive (Plotly)":
-                plot_interactive_plotly(df, divs, selected_symbol, vol_method, vol_window)
+                plot_interactive_plotly(df, divs, selected_symbol, vol_method, vol_window, custom_ma_fast, custom_ma_slow)
             else:  # ECharts (True Sync Tooltip)
-                plot_echarts_synchronized(df, divs, selected_symbol, vol_method, vol_window)
+                plot_echarts_synchronized(df, divs, selected_symbol, vol_method, vol_window, custom_ma_fast, custom_ma_slow)
 
-            ma_results_map = st.session_state.get("ma_results_map", {})
-            ma_result = ma_results_map.get(selected_symbol)
-            if ma_result is None:
-                ma_result = apply_moving_average_analysis(selected_symbol, df)
 
-            st.subheader(f"{selected_symbol} Moving Average Signals")
-            plot_ma_crossover_signals_plotly(selected_symbol, df, ma_result)
 
     # --- Date-wise Divergence Summary ---
     if st.session_state.get("datewise_summary"):

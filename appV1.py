@@ -108,6 +108,7 @@ def fetch_upstox_historical_data(instrument_key, interval, from_date, to_date, a
     """
     Fetches historical candle data from Upstox API v2.
     """
+    if access_token: access_token = access_token.replace("Bearer ", "").strip()
     api_instance = upstox_client.HistoryApi()
     api_instance.api_client.configuration.access_token = access_token
 
